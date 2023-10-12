@@ -28,4 +28,6 @@ features = [
 ]
 
 [dependencies]
+bitflags = "2"
+
 rwh = { package = "raw-window-handle", version = "0.6", optional = true }

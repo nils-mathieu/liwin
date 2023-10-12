@@ -1,9 +1,13 @@
 use std::mem::size_of;
 
-use windows_sys::Win32::Foundation::{HMODULE, HWND};
+use bitflags::bitflags;
+use windows_sys::Win32::Foundation::{HMODULE, HWND, RECT};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use super::Error;
+
+/// The function signature of the window procedure.
+pub type WndprocFn = unsafe extern "system" fn(HWND, u32, usize, isize) -> isize;
 
 /// A wrapper around an [`HWND`].
 ///
@@ -15,14 +19,23 @@ pub struct Hwnd {
 
 impl Hwnd {
     /// Creates a new [`Hwnd`] instance.
-    pub fn new(config: &crate::Config) -> Result<Self, Error> {
-        let class = WindowClass::new()?;
+    ///
+    /// # Notes
+    ///
+    /// This function sets the window styles to 0 because the `CreateWindowExW` function implies
+    /// some styles which may not be desirable. Instead, use [`Hwnd::set_styles`] to set the
+    /// styles of the window.
+    pub fn new(
+        title: &str,
+        position: Option<(i32, i32)>,
+        size: Option<(u32, u32)>,
+        wndproc: WndprocFn,
+    ) -> Result<Self, Error> {
+        let class = WindowClass::new(wndproc)?;
 
-        let (style, ex_style) = make_window_styles(config);
-        let name = make_utf16(config.title);
-        let (x, y) = config.position.unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
-        let (w, h) = config
-            .size
+        let name = make_utf16(title);
+        let (x, y) = position.unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
+        let (width, height) = size
             .map(|(w, h)| (w as i32, h as i32))
             .unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
 
@@ -34,8 +47,8 @@ impl Hwnd {
                 0,
                 x,
                 y,
-                w,
-                h,
+                width,
+                height,
                 0,
                 0,
                 class.hinstance,
@@ -43,23 +56,24 @@ impl Hwnd {
             )
         };
 
-        // Set the window styles separately as the `CreateWindowExW` function seems
-        // to imply some styles.
-        unsafe {
-            SetWindowLongW(hwnd, GWL_STYLE, style as i32);
-            SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style as i32);
-        }
-
-        // Only show the window *after* the styles have been applied, and only if it has
-        // been requested.
-        if config.visible {
-            unsafe { ShowWindow(hwnd, SW_SHOWNORMAL) };
-        }
-
         if hwnd == 0 {
             Err(Error::last())
         } else {
             Ok(Self { hwnd, class })
+        }
+    }
+
+    /// Sets the style of the window.
+    pub fn set_styles(&mut self, style: WindowStyles) -> Result<(), Error> {
+        unsafe {
+            let (style, ex_style) = style.to_raw_styles();
+
+            // Set the EX_STYLE first to ensure that if the STYLE has a VISIBLE flag, the window
+            // will be shown with the correct styles.
+            let a = set_window_long(self.hwnd, GWL_EXSTYLE, ex_style as i32);
+            let b = set_window_long(self.hwnd, GWL_STYLE, style as i32);
+
+            a.and(b)
         }
     }
 
@@ -112,7 +126,6 @@ impl Hwnd {
     }
 
     /// Sets the userdata associated with the window.
-    #[inline]
     pub fn set_userdata(&mut self, userdata: usize) -> Result<(), Error> {
         Error::SUCCESS.make_last();
 
@@ -126,6 +139,23 @@ impl Hwnd {
         }
 
         Ok(())
+    }
+
+    /// Gets the rectangle of the client area of the window.
+    ///
+    /// # Returns
+    ///
+    /// On success, the bounds of the client area of the window are returned in the following
+    /// order: `(left, top, right, bottom)`.
+    pub fn get_client_rect(&self) -> Result<(i32, i32, i32, i32), Error> {
+        let mut rect = unsafe { std::mem::zeroed() };
+        let ret = unsafe { GetClientRect(self.hwnd, &mut rect) };
+
+        if ret == 0 {
+            Err(Error::last())
+        } else {
+            Ok((rect.left, rect.top, rect.right, rect.bottom))
+        }
     }
 
     /// Executes the message handler of the window, calling it for *potentially* multiple messages,
@@ -229,7 +259,7 @@ struct WindowClass {
 
 impl WindowClass {
     /// Creates a new [`WindowClass`] instance.
-    pub fn new() -> Result<Self, Error> {
+    pub fn new(wndproc: WndprocFn) -> Result<Self, Error> {
         let hinstance = get_current_hinstance()?;
 
         let info = WNDCLASSEXW {
@@ -243,7 +273,7 @@ impl WindowClass {
             style: CS_HREDRAW | CS_VREDRAW,
             lpszMenuName: std::ptr::null(),
             lpszClassName: windows_sys::w!("liwin_window_class"),
-            lpfnWndProc: Some(super::wndproc::wndproc),
+            lpfnWndProc: Some(wndproc),
             hIconSm: 0,
         };
 
@@ -278,38 +308,118 @@ fn get_current_hinstance() -> Result<HMODULE, Error> {
     }
 }
 
-/// Converts the window config [`crate::Config`] into the corresponding Windows styles.
-///
-/// The first element of the tuple is the window style, the second is the extended window style.
-fn make_window_styles(config: &crate::Config) -> (u32, u32) {
-    let mut style = 0;
-    let mut ex_style = 0;
+bitflags! {
+    /// A set of window styles.
+    ///
+    /// # Representation
+    ///
+    /// The lower 32 bits represent the window style, the higher 32 bits represent the extended
+    /// window style.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct WindowStyles: u64 {
+        /// The window should be visible.
+        const VISIBLE = WS_VISIBLE as u64;
 
-    ex_style |= WS_EX_ACCEPTFILES;
+        /// The window should always appear on top of other windows.
+        const TOPMOST = (WS_EX_TOPMOST as u64) >> 32;
 
-    if config.visible {
-        style |= WS_VISIBLE;
+        /// The window should have a title bar.
+        ///
+        /// This includes the [`BORDER`](WindowStyles::BORDER) style.
+        const CAPTION = (WS_CAPTION | WS_BORDER) as u64;
+
+        /// The window should have the default system menu.
+        const SYSMENU = WS_SYSMENU as u64;
+
+        /// The window has a thin border.
+        const BORDER = WS_POPUP as u64;
+
+        /// The window has a sizing border.
+        const SIZE_BOX = WS_SIZEBOX as u64;
+
+        /// The window has a minimize box.
+        const MAXIMIZE_BOX = WS_MAXIMIZEBOX as u64;
+
+        /// The window has a minimize box.
+        const MINIMIZE_BOX = WS_MINIMIZEBOX as u64;
+
+        /// The window accepts dropped files.
+        const ACCEPT_FILES = (WS_EX_ACCEPTFILES as u64) >> 32;
+    }
+}
+
+impl WindowStyles {
+    /// Converts this [`WindowStyles`] instance into the corresponding raw styles.
+    fn to_raw_styles(self) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
+        let bits = self.bits();
+
+        let style = bits as u32;
+        let ex_style = (bits >> 32) as u32;
+
+        (style, ex_style)
     }
 
-    if config.always_on_top {
-        ex_style |= WS_EX_TOPMOST;
-    }
+    /// Converts the given client size to the corresponding window size, for a window with the
+    /// provided styles.
+    pub fn client_to_window_rect(
+        self,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    ) -> Result<(i32, i32, i32, i32), Error> {
+        let (style, ex_style) = self.to_raw_styles();
 
-    if config.decorations {
-        style |= WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+        let mut rect = RECT {
+            left,
+            top,
+            right,
+            bottom,
+        };
 
-        if config.resizable {
-            style |= WS_SIZEBOX;
-            style |= WS_MAXIMIZEBOX;
+        let ret = unsafe { AdjustWindowRectEx(&mut rect, style, 0, ex_style) };
+
+        if ret == 0 {
+            Err(Error::last())
+        } else {
+            Ok((rect.left, rect.top, rect.right, rect.bottom))
         }
-    } else {
-        style |= WS_POPUP;
     }
 
-    (style, ex_style)
+    /// Converts the given client size to the corresponding window size, for a window with the
+    /// provided styles.
+    pub fn client_to_window_size(self, width: u32, height: u32) -> Result<(u32, u32), Error> {
+        let (left, top, right, bottom) =
+            self.client_to_window_rect(0, 0, width as i32, height as i32)?;
+        Ok(((right - left) as u32, (bottom - top) as u32))
+    }
 }
 
 /// Creates a null-terminated UTF-16 string from the given Rust string.
 fn make_utf16(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
+}
+
+/// Wraps the `SetWindowLongW` function and returns a standard result.
+///
+/// # Safety
+///
+/// No idea, check the [documentation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowlongw).
+unsafe fn set_window_long(
+    hwnd: HWND,
+    index: WINDOW_LONG_PTR_INDEX,
+    value: i32,
+) -> Result<(), Error> {
+    Error::SUCCESS.make_last();
+
+    let ret = unsafe { SetWindowLongW(hwnd, index, value) };
+
+    if ret == 0 {
+        let err = Error::last();
+        if err != Error::SUCCESS {
+            return Err(err);
+        }
+    }
+
+    Ok(())
 }

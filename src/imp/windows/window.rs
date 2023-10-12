@@ -1,4 +1,4 @@
-use super::hwnd::{Hwnd, ShowWindow};
+use super::hwnd::{Hwnd, ShowWindow, WindowStyles};
 use super::wndproc::State;
 use super::Error;
 
@@ -11,8 +11,25 @@ pub struct Window {
 impl Window {
     /// Creates a new [`Window`] instance.
     pub fn new(config: crate::Config) -> Result<Self, Error> {
-        let mut hwnd = Hwnd::new(&config)?;
+        let styles = make_window_styles(&config);
 
+        let window_size = match config.size {
+            Some((width, height)) => Some(styles.client_to_window_size(width, height)?),
+            None => None,
+        };
+
+        let mut hwnd = Hwnd::new(
+            config.title,
+            config.position,
+            window_size,
+            super::wndproc::wndproc,
+        )?;
+
+        // Set the window styles separately as the `CreateWindowExW` function seems
+        // to imply some styles.
+        hwnd.set_styles(styles)?;
+
+        // Enable the WM_INPUT message.
         hwnd.enable_raw_input()?;
 
         let mut state: Box<super::wndproc::State> = Box::default();
@@ -30,6 +47,16 @@ impl Window {
         };
 
         self.hwnd.show_window(cmd);
+    }
+
+    /// See [`crate::Window::client_size`]
+    pub fn client_size(&self) -> (u32, u32) {
+        let (left, top, right, bottom) = self
+            .hwnd
+            .get_client_rect()
+            .unwrap_or_else(|err| unexpected_windows_error(err));
+
+        ((right - left) as u32, (bottom - top) as u32)
     }
 
     /// See [`crate::Window::poll_events`]
@@ -78,4 +105,40 @@ impl<'a> Drop for HandlerGuard<'a> {
     fn drop(&mut self) {
         self.0.remove_handler();
     }
+}
+
+/// Converts the window config [`crate::Config`] into the corresponding Windows styles.
+///
+/// The first element of the tuple is the window style, the second is the extended window style.
+fn make_window_styles(config: &crate::Config) -> WindowStyles {
+    let mut styles = WindowStyles::empty();
+
+    styles |= WindowStyles::ACCEPT_FILES;
+
+    if config.visible {
+        styles |= WindowStyles::VISIBLE;
+    }
+
+    if config.always_on_top {
+        styles |= WindowStyles::TOPMOST;
+    }
+
+    if config.decorations {
+        styles |= WindowStyles::CAPTION | WindowStyles::SYSMENU | WindowStyles::MINIMIZE_BOX;
+
+        if config.resizable {
+            styles |= WindowStyles::MAXIMIZE_BOX | WindowStyles::SIZE_BOX;
+        }
+    } else {
+        styles |= WindowStyles::BORDER;
+    }
+
+    styles
+}
+
+/// Windows unexpectedly returned an error.
+#[track_caller]
+#[cold]
+fn unexpected_windows_error(err: Error) -> ! {
+    panic!("unexpected windows error: {err:?} - please report this bug!")
 }

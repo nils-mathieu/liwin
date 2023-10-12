@@ -15,8 +15,15 @@ impl Window {
     }
 
     /// Sets the visibility of the window.
+    #[inline(always)]
     pub fn set_visible(&mut self, yes: bool) {
         self.0.set_visible(yes);
+    }
+
+    /// Returns the size of the window's client area.
+    #[inline(always)]
+    pub fn client_size(&self) -> (u32, u32) {
+        self.0.client_size()
     }
 
     /// Calls the given closure with the new, unprocessed events.
