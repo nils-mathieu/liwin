@@ -16,21 +16,73 @@ fn default_wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRES
     }
 }
 
-/// The default handler function for [`State`].
-#[allow(unused_variables)]
-fn default_state_handler(state: *mut (), event: crate::Event) {}
-
-/// Stores some state that is required to transform window events into [`crate::Event`]s.
-pub struct State {
+/// A dynamic event handler.
+struct DynHandler {
+    /// The state to be passed to the `handler_fn`.
+    ///
+    /// # Note on thread safety
+    ///
+    /// This type will only ever be accessed mutably when enables us to only require the function
+    /// to be `Send` instead of both `Send` and `Sync`.
+    state: *mut (),
     /// A function to call when the window receives an event.
     ///
     /// # Safety
     ///
     /// This function expects the `state` parameter to be a pointer to the associated
     /// `handler_state`.
-    handler_fn: unsafe fn(state: *mut (), event: crate::Event),
-    /// The state to be passed to the `handler_fn`.
-    handler_state: *mut (),
+    f: unsafe fn(*mut (), crate::Event),
+}
+
+impl DynHandler {
+    /// Creates a new [`DynHandler`] instance from the provided function.
+    ///
+    /// # Safety
+    ///
+    /// The function must be remain valid for the lifetime of the returned instance.
+    unsafe fn new<F>(f: &mut F) -> Self
+    where
+        F: Send + FnMut(crate::Event),
+    {
+        unsafe fn handler_fn<F>(state: *mut (), event: crate::Event)
+        where
+            F: FnMut(crate::Event),
+        {
+            let f = unsafe { &mut *(state as *mut F) };
+            f(event);
+        }
+
+        Self {
+            state: f as *mut F as *mut (),
+            f: handler_fn::<F>,
+        }
+    }
+
+    /// Sends an event to the handler function.
+    fn send_event(&mut self, event: crate::Event) {
+        unsafe { (self.f)(self.state, event) };
+    }
+}
+
+unsafe impl Send for DynHandler {}
+unsafe impl Sync for DynHandler {}
+
+impl Default for DynHandler {
+    fn default() -> Self {
+        fn default_dyn_handler_fn(_: *mut (), _: crate::Event) {}
+
+        Self {
+            f: default_dyn_handler_fn,
+            state: std::ptr::null_mut(),
+        }
+    }
+}
+
+/// Stores some state that is required to transform window events into [`crate::Event`]s.
+#[derive(Default)]
+pub struct State {
+    /// The handler used to receive events.
+    handler: DynHandler,
 
     /// An eventual low surrogate of a UTF-16 character.
     ///
@@ -50,30 +102,21 @@ impl State {
     #[inline]
     pub unsafe fn set_handler<F>(&mut self, handler: &mut F)
     where
-        F: FnMut(crate::Event),
+        F: Send + FnMut(crate::Event),
     {
-        fn handler_fn<F>(state: *mut (), event: crate::Event)
-        where
-            F: FnMut(crate::Event),
-        {
-            let f = unsafe { &mut *(state as *mut F) };
-            f(event);
-        }
-
-        self.handler_fn = handler_fn::<F>;
-        self.handler_state = handler as *mut F as *mut ();
+        self.handler = unsafe { DynHandler::new(handler) };
     }
 
     /// Removes the handler function.
     #[inline]
     pub fn remove_handler(&mut self) {
-        self.handler_fn = default_state_handler;
+        self.handler = DynHandler::default();
     }
 
     /// Sends an event to the handler function.
     #[inline]
     pub fn send_event(&mut self, event: crate::Event) {
-        unsafe { (self.handler_fn)(self.handler_state, event) };
+        self.handler.send_event(event)
     }
 
     /// Take an UTF-16 code point.
@@ -94,17 +137,6 @@ impl State {
             self.send_event(crate::Event::Text(c));
 
             self.low_surrogate = 0;
-        }
-    }
-}
-
-impl Default for State {
-    #[inline]
-    fn default() -> Self {
-        Self {
-            handler_fn: default_state_handler,
-            handler_state: std::ptr::null_mut(),
-            low_surrogate: 0,
         }
     }
 }

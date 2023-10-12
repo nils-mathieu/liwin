@@ -10,8 +10,8 @@ pub struct Window {
 
 impl Window {
     /// Creates a new [`Window`] instance.
-    pub fn new(config: &crate::Config) -> Result<Self, Error> {
-        let mut hwnd = Hwnd::new(config)?;
+    pub fn new(config: crate::Config) -> Result<Self, Error> {
+        let mut hwnd = Hwnd::new(&config)?;
 
         hwnd.enable_raw_input()?;
 
@@ -35,7 +35,7 @@ impl Window {
     /// See [`crate::Window::poll_events`]
     pub fn poll_events<F>(&mut self, mut handler: F)
     where
-        F: FnMut(crate::Event),
+        F: Send + FnMut(crate::Event),
     {
         let guard = HandlerGuard(&mut self.state);
         unsafe { guard.0.set_handler(&mut handler) };
@@ -45,7 +45,7 @@ impl Window {
     /// See [`crate::Window::blocking_poll_events`]
     pub fn blocking_poll_events<F>(&mut self, mut handler: F)
     where
-        F: FnMut(crate::Event),
+        F: Send + FnMut(crate::Event),
     {
         let guard = HandlerGuard(&mut self.state);
         unsafe { guard.0.set_handler(&mut handler) };

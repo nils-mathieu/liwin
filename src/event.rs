@@ -146,7 +146,7 @@ impl fmt::Debug for MouseButton {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Key {
     /// The **BACKSPACE** key.
-    Backspace,
+    Backspace = 1,
     /// The **TAB** key.
     Tab,
     /// The **ENTER** key.

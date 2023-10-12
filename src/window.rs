@@ -7,7 +7,7 @@ pub struct Window(pub(crate) imp::Window);
 
 impl Window {
     /// Creates a new [`Window`] instance, initiating a connection to the windowing system.
-    pub fn new(config: &crate::Config) -> Result<Self, Error> {
+    pub fn new(config: crate::Config) -> Result<Self, Error> {
         match imp::Window::new(config) {
             Ok(window) => Ok(Self(window)),
             Err(error) => Err(Error(error)),
@@ -23,7 +23,7 @@ impl Window {
     ///
     /// If no events are available, this function will return immediately.
     #[inline(always)]
-    pub fn poll_events(&mut self, handler: impl FnMut(Event)) {
+    pub fn poll_events(&mut self, handler: impl Send + FnMut(Event)) {
         self.0.poll_events(handler);
     }
 
@@ -31,7 +31,7 @@ impl Window {
     ///
     /// If no events are available, this function will block until one is received.
     #[inline(always)]
-    pub fn blocking_poll_events(&mut self, handler: impl FnMut(Event)) {
+    pub fn blocking_poll_events(&mut self, handler: impl Send + FnMut(Event)) {
         self.0.blocking_poll_events(handler);
     }
 }
