@@ -5,14 +5,14 @@ games and other applications that require a simple and easy-to-use windowing lib
 
 ## Supported Platforms
 
-- [x] Windows
+- [ ] Windows (in progress)
 - [ ] Linux
 - [ ] MacOS
 
 ## Acknowledgements
 
-Liwin is heavily inspired by `[winit]` but it is designed to be simpler and more lightweight. In
-return, Liwin is not as feature-rich as winit. Specifically, Liwin does not support opening
-multiple windows.
+Liwin is heavily inspired by [`winit`] but it is designed to be simpler and more lightweight. In
+return, Liwin is not as feature-rich as winit. For example, Liwin does not support opening
+multiple windows, and is not DPI aware.
 
-[winit]: https://github.com/rust-windowing/winit
+[`winit`]: https://github.com/rust-windowing/winit
