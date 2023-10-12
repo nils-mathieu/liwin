@@ -1,0 +1,9 @@
+[package]
+name = "liwin"
+version = "0.1.0"
+edition = "2021"
+authors = ["Nils Mathieu <nils.mathieu.contact@gmail.com>"]
+description = "A light windowing library for Rust"
+repository = "https://github.com/nils-mathieu/liwin"
+license = "MIT"
+readme = "README.md"
